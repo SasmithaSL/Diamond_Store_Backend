@@ -37,16 +37,32 @@ app.use(
 );
 
 // CORS configuration - restrict to your frontend domains in production
+const defaultAllowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://154.19.187.78:3000",
+  "http://154.19.187.78:3001",
+];
+
+const allowedOriginsFromEnv = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 const corsOptions = {
   origin:
     process.env.NODE_ENV === "production"
-      ? process.env.ALLOWED_ORIGINS?.split(",") || ["https://yourdomain.com"]
-      : ["http://localhost:3000", "http://localhost:3001"],
+      ? allowedOriginsFromEnv.length > 0
+        ? allowedOriginsFromEnv
+        : defaultAllowedOrigins
+      : defaultAllowedOrigins,
   credentials: true,
   optionsSuccessStatus: 200,
 };
 
 app.use(cors(corsOptions));
+// Ensure CORS preflight requests are handled for all routes
+app.options("*", cors(corsOptions));
 
 // Body parser with size limits
 app.use(express.json({ limit: "10mb" }));
