@@ -43,14 +43,12 @@ router.post('/register', authLimiter, upload.uploadMultiple, async (req, res) =>
     }
 
     // Check if user already exists
+    // Allow re-registration ONLY if the existing account was REJECTED
+    // (common UX: user fixes info/images and re-submits for approval)
     const [existingUser] = await pool.query(
-      'SELECT id FROM users WHERE id_number = ?',
+      'SELECT id, status, role, face_image, id_card_front, id_card_back FROM users WHERE id_number = ?',
       [sanitizedIdNumber]
     );
-
-    if (existingUser.length > 0) {
-      return res.status(400).json({ error: 'ID number already registered' });
-    }
 
     // Hash password with higher rounds for production
     const saltRounds = process.env.NODE_ENV === 'production' ? 12 : 10;
@@ -131,6 +129,63 @@ router.post('/register', authLimiter, upload.uploadMultiple, async (req, res) =>
 
     if (!idCardFront || !idCardBack) {
       return res.status(400).json({ error: 'Both ID card front and back images are required' });
+    }
+
+    // If user exists:
+    // - REJECTED + USER: update the same record and set status back to PENDING
+    // - Otherwise: block duplicate registration
+    if (existingUser.length > 0) {
+      const existing = existingUser[0];
+
+      // Safety: never allow overwriting admin accounts
+      if (existing.role === 'ADMIN') {
+        return res.status(400).json({ error: 'ID number already registered' });
+      }
+
+      if (existing.status !== 'REJECTED') {
+        return res.status(400).json({ error: 'ID number already registered' });
+      }
+
+      // Best-effort delete old images to avoid orphaned files
+      try {
+        const fs = require('fs');
+        const oldFiles = [existing.face_image, existing.id_card_front, existing.id_card_back].filter(Boolean);
+        for (const oldFile of oldFiles) {
+          // We store just filenames (preferred). If absolute path somehow exists, handle it too.
+          const oldPath = path.isAbsolute(oldFile) ? oldFile : path.join(uploadPath, oldFile);
+          if (fs.existsSync(oldPath)) {
+            fs.unlinkSync(oldPath);
+          }
+        }
+      } catch (cleanupErr) {
+        // Don't fail registration because of cleanup
+        console.warn('[Register] Failed to cleanup old images:', cleanupErr?.message || cleanupErr);
+      }
+
+      await pool.query(
+        `UPDATE users
+         SET name = ?,
+             nickname = ?,
+             face_image = ?,
+             id_card_front = ?,
+             id_card_back = ?,
+             password_hash = ?,
+             status = 'PENDING',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [sanitizedName, sanitizedNickname, faceImage, idCardFront, idCardBack, passwordHash, existing.id]
+      );
+
+      const [result] = await pool.query(
+        `SELECT id, name, id_number, status, created_at 
+         FROM users WHERE id = ?`,
+        [existing.id]
+      );
+
+      return res.status(201).json({
+        message: 'Registration updated. Waiting for admin approval.',
+        user: result[0],
+      });
     }
 
     // Insert new user
