@@ -238,39 +238,70 @@ router.post('/register', authLimiter, upload.uploadMultiple, async (req, res) =>
 // Login
 router.post('/login', authLimiter, async (req, res) => {
   try {
-    const { email, password } = req.body;
+    // Support both email and idNumber for admin login
+    const { email, idNumber, password } = req.body;
+    const identifier = email || idNumber;
 
     // Validate inputs
-    if (!email || typeof email !== 'string' || email.trim() === '') {
-      return res.status(400).json({ error: 'Email and password are required' });
+    if (!identifier || typeof identifier !== 'string' || identifier.trim() === '') {
+      return res.status(400).json({ error: 'Email/ID and password are required' });
     }
 
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email.trim())) {
-      return res.status(400).json({ error: 'Invalid email format' });
-    }
-
-    const sanitizedEmail = validateString(email.trim().toLowerCase(), 255);
-    if (!sanitizedEmail || !password) {
-      return res.status(400).json({ error: 'Email and password are required' });
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required' });
     }
 
     if (password.length > 128) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
 
-    // Find user
-    const [result] = await pool.query(
-      'SELECT id, name, id_number, email, password_hash, status, role, points_balance FROM users WHERE email = ?',
-      [sanitizedEmail]
-    );
+    let user = null;
+    const trimmedIdentifier = identifier.trim();
 
-    if (result.length === 0) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+    // Check if identifier is an email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const isEmail = emailRegex.test(trimmedIdentifier);
+
+    if (isEmail) {
+      // Login by email (regular users)
+      const sanitizedEmail = validateString(trimmedIdentifier.toLowerCase(), 255);
+      if (!sanitizedEmail) {
+        return res.status(400).json({ error: 'Invalid email format' });
+      }
+
+      const [result] = await pool.query(
+        'SELECT id, name, id_number, email, password_hash, status, role, points_balance FROM users WHERE email = ?',
+        [sanitizedEmail]
+      );
+
+      if (result.length === 0) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+
+      user = result[0];
+    } else {
+      // Login by id_number (admin users)
+      const sanitizedIdNumber = validateString(trimmedIdentifier, 50);
+      if (!sanitizedIdNumber) {
+        return res.status(400).json({ error: 'Invalid ID number format' });
+      }
+
+      const [result] = await pool.query(
+        'SELECT id, name, id_number, email, password_hash, status, role, points_balance FROM users WHERE id_number = ?',
+        [sanitizedIdNumber]
+      );
+
+      if (result.length === 0) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+
+      user = result[0];
+
+      // Only allow id_number login for admin users
+      if (user.role !== 'ADMIN') {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
     }
-
-    const user = result[0];
 
     // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password_hash);
