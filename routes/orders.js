@@ -217,7 +217,8 @@ router.post(
 router.get("/my-orders", authenticateToken, async (req, res) => {
   try {
     const [result] = await pool.query(
-      `SELECT o.* FROM orders o 
+      `SELECT o.*, u.email as parent_user_email FROM orders o 
+       LEFT JOIN users u ON o.user_id = u.id
        WHERE o.user_id = ? 
        ORDER BY o.created_at DESC`,
       [req.user.id]
@@ -237,7 +238,7 @@ router.get("/pending", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const [result] = await pool.query(
       `SELECT o.*, 
-       u.name as parent_user_name, u.id_number as parent_user_id_number
+       u.name as parent_user_name, u.id_number as parent_user_id_number, u.email as parent_user_email
        FROM orders o
        LEFT JOIN users u ON o.user_id = u.id
        WHERE o.status = 'PENDING'

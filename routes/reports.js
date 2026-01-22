@@ -238,6 +238,7 @@ router.get("/weekly", authenticateToken, requireAdmin, async (req, res) => {
         u.name,
         u.nickname,
         u.id_number,
+        u.email,
         COUNT(DISTINCT o.id) as order_count,
         COALESCE(SUM(o.diamond_amount * COALESCE(o.quantity, 1)), 0) as user_sales,
         COALESCE(SUM(CASE WHEN pt.transaction_type = 'ADDED' AND pt.description LIKE 'Weekly Sale Reward%' THEN pt.amount ELSE 0 END), 0) as user_reward
@@ -252,7 +253,7 @@ router.get("/weekly", authenticateToken, requireAdmin, async (req, res) => {
         AND o.created_at >= ?
         AND o.created_at < ?
         ${userCondition}
-      GROUP BY u.id, u.name, u.nickname, u.id_number
+      GROUP BY u.id, u.name, u.nickname, u.id_number, u.email
       ORDER BY user_sales DESC`,
       [...queryParams, weekStartStr, weekEndStr]
     );

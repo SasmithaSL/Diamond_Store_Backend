@@ -10,11 +10,27 @@ const router = express.Router();
 // Register new user
 router.post('/register', authLimiter, upload.uploadMultiple, async (req, res) => {
   try {
-    const { name, nickname, idNumber, password } = req.body;
+    const { phoneNumber, nickname, email, idNumber, password } = req.body;
 
     // Validate and sanitize inputs
-    if (!name || typeof name !== 'string' || name.trim() === '') {
-      return res.status(400).json({ error: 'Full name is required' });
+    if (!phoneNumber || typeof phoneNumber !== 'string' || phoneNumber.trim() === '') {
+      return res.status(400).json({ error: 'Phone number is required' });
+    }
+
+    // Validate phone number format (only digits, at least 10 characters)
+    const phoneDigits = phoneNumber.replace(/\D/g, '');
+    if (phoneDigits.length < 10) {
+      return res.status(400).json({ error: 'Phone number must be at least 10 digits' });
+    }
+
+    if (!email || typeof email !== 'string' || email.trim() === '') {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({ error: 'Invalid email format' });
     }
 
     if (!idNumber || typeof idNumber !== 'string' || idNumber.trim() === '') {
@@ -25,11 +41,15 @@ router.post('/register', authLimiter, upload.uploadMultiple, async (req, res) =>
       return res.status(400).json({ error: 'Password is required' });
     }
 
-    const sanitizedName = validateString(name, 255);
+    // Sanitize inputs
+    const sanitizedPhoneNumber = validateString(phoneDigits, 20);
     const sanitizedNickname = nickname ? validateString(nickname, 100) : null;
+    const sanitizedEmail = validateString(email.trim().toLowerCase(), 255);
     const sanitizedIdNumber = validateString(idNumber, 50);
+    // Use nickname as name, or empty string if no nickname
+    const sanitizedName = sanitizedNickname || '';
     
-    if (!sanitizedName || !sanitizedIdNumber) {
+    if (!sanitizedPhoneNumber || !sanitizedEmail || !sanitizedIdNumber) {
       return res.status(400).json({ error: 'Invalid input format' });
     }
 
@@ -166,6 +186,8 @@ router.post('/register', authLimiter, upload.uploadMultiple, async (req, res) =>
         `UPDATE users
          SET name = ?,
              nickname = ?,
+             phone_number = ?,
+             email = ?,
              face_image = ?,
              id_card_front = ?,
              id_card_back = ?,
@@ -173,7 +195,7 @@ router.post('/register', authLimiter, upload.uploadMultiple, async (req, res) =>
              status = 'PENDING',
              updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
-        [sanitizedName, sanitizedNickname, faceImage, idCardFront, idCardBack, passwordHash, existing.id]
+        [sanitizedName, sanitizedNickname, sanitizedPhoneNumber, sanitizedEmail, faceImage, idCardFront, idCardBack, passwordHash, existing.id]
       );
 
       const [result] = await pool.query(
@@ -190,9 +212,9 @@ router.post('/register', authLimiter, upload.uploadMultiple, async (req, res) =>
 
     // Insert new user
     const [insertResult] = await pool.query(
-      `INSERT INTO users (name, nickname, id_number, face_image, id_card_front, id_card_back, password_hash, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')`,
-      [sanitizedName, sanitizedNickname, sanitizedIdNumber, faceImage, idCardFront, idCardBack, passwordHash]
+      `INSERT INTO users (name, nickname, phone_number, email, id_number, face_image, id_card_front, id_card_back, password_hash, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')`,
+      [sanitizedName, sanitizedNickname, sanitizedPhoneNumber, sanitizedEmail, sanitizedIdNumber, faceImage, idCardFront, idCardBack, passwordHash]
     );
 
     // Get the inserted user
@@ -216,12 +238,22 @@ router.post('/register', authLimiter, upload.uploadMultiple, async (req, res) =>
 // Login
 router.post('/login', authLimiter, async (req, res) => {
   try {
-    const { idNumber, password } = req.body;
+    const { email, password } = req.body;
 
     // Validate inputs
-    const sanitizedIdNumber = validateString(idNumber, 50);
-    if (!sanitizedIdNumber || !password) {
-      return res.status(400).json({ error: 'ID number and password are required' });
+    if (!email || typeof email !== 'string' || email.trim() === '') {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+
+    const sanitizedEmail = validateString(email.trim().toLowerCase(), 255);
+    if (!sanitizedEmail || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
     }
 
     if (password.length > 128) {
@@ -230,8 +262,8 @@ router.post('/login', authLimiter, async (req, res) => {
 
     // Find user
     const [result] = await pool.query(
-      'SELECT id, name, id_number, password_hash, status, role, points_balance FROM users WHERE id_number = ?',
-      [sanitizedIdNumber]
+      'SELECT id, name, id_number, email, password_hash, status, role, points_balance FROM users WHERE email = ?',
+      [sanitizedEmail]
     );
 
     if (result.length === 0) {
@@ -340,7 +372,7 @@ router.post('/check-status', authLimiter, async (req, res) => {
 router.get('/me', authenticateToken, async (req, res) => {
   try {
     const [result] = await pool.query(
-      `SELECT id, name, nickname, id_number, face_image, id_card_front, id_card_back, status, points_balance, role, created_at 
+      `SELECT id, name, nickname, phone_number, id_number, face_image, id_card_front, id_card_back, status, points_balance, role, created_at 
        FROM users WHERE id = ?`,
       [req.user.id]
     );

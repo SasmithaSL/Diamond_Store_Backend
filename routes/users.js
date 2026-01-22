@@ -715,7 +715,7 @@ router.get("/dashboard", authenticateToken, async (req, res) => {
 router.get("/pending", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const [result] = await pool.query(
-      `SELECT id, name, nickname, id_number, face_image, status, created_at 
+      `SELECT id, name, nickname, email, id_number, face_image, status, created_at 
        FROM users 
        WHERE status = 'PENDING' 
        ORDER BY created_at DESC`
@@ -929,7 +929,7 @@ router.post(
 router.get("/approved", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const [result] = await pool.query(
-      `SELECT id, name, nickname, id_number, points_balance, status, created_at 
+      `SELECT id, name, nickname, email, id_number, points_balance, status, created_at 
        FROM users 
        WHERE status = 'APPROVED' AND role = 'USER'
        ORDER BY created_at DESC`
@@ -1406,7 +1406,7 @@ router.get(
   requireAdmin,
   async (req, res) => {
     try {
-      const { userId, idNumber, limit = 100 } = req.query;
+      const { userId, idNumber, email, limit = 100 } = req.query;
 
       let query = `
       SELECT 
@@ -1419,6 +1419,7 @@ router.get(
         pt.created_at,
         u.name as user_name,
         u.id_number as user_id_number,
+        u.email as user_email,
         u.nickname as user_nickname,
         admin.name as admin_name
       FROM transactions pt
@@ -1436,6 +1437,11 @@ router.get(
       if (idNumber) {
         query += ` AND u.id_number = ?`;
         params.push(idNumber);
+      }
+
+      if (email) {
+        query += ` AND LOWER(u.email) = LOWER(?)`;
+        params.push(email);
       }
 
       query += ` ORDER BY pt.created_at DESC LIMIT ?`;
@@ -1467,7 +1473,7 @@ router.get("/:userId", authenticateToken, requireAdmin, async (req, res) => {
     }
 
     const [result] = await pool.query(
-      `SELECT id, name, nickname, id_number, face_image, id_card_front, id_card_back, 
+      `SELECT id, name, nickname, phone_number, email, id_number, face_image, id_card_front, id_card_back, 
               points_balance, status, role, created_at, updated_at 
        FROM users 
        WHERE id = ?`,
