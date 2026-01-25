@@ -15,6 +15,7 @@ process.env.TZ = process.env.APP_TIMEZONE || "Asia/Colombo";
 validateEnv();
 
 const app = express();
+app.set("trust proxy", true);
 
 // Security middleware
 app.use(

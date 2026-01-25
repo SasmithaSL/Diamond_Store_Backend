@@ -5,12 +5,21 @@ const rateLimit = require('express-rate-limit');
 // In development, rate limiting is more lenient
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
+const getClientIp = (req) => {
+  const cfIp = req.headers['cf-connecting-ip'];
+  if (typeof cfIp === 'string' && cfIp.trim() !== '') {
+    return cfIp.trim();
+  }
+  return req.ip;
+};
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: isDevelopment ? 100 : 20, // More lenient in development (100), stricter in production (20)
   message: 'Too many login attempts, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: getClientIp,
 });
 
 // Rate limiting for API endpoints
@@ -20,6 +29,7 @@ const apiLimiter = rateLimit({
   message: 'Too many requests, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: getClientIp,
 });
 
 // Rate limiting for order creation
@@ -29,6 +39,7 @@ const orderLimiter = rateLimit({
   message: 'Too many order requests, please slow down.',
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: getClientIp,
 });
 
 // Input sanitization helper
