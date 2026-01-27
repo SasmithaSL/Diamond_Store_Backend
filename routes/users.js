@@ -4,6 +4,7 @@ const pool = require("../database/connection");
 const { authenticateToken, requireAdmin } = require("../middleware/auth");
 const upload = require("../middleware/upload");
 const { validateString } = require("../middleware/security");
+const { notifyStatus } = require("../utils/pendingStatusStream");
 const path = require("path");
 const router = express.Router();
 
@@ -771,6 +772,10 @@ router.patch(
         `SELECT id, name, id_number, status FROM users WHERE id = ?`,
         [userId]
       );
+
+      if (result[0]?.id_number) {
+        notifyStatus(result[0].id_number, statusUpper);
+      }
 
       res.json({
         message: `User ${statusUpper.toLowerCase()} successfully`,

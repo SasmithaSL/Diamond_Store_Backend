@@ -125,7 +125,12 @@ app.get("/uploads/:filename", async (req, res) => {
     console.log(`[Image Request] ✓ Serving: ${filePath}`);
     // Set headers before sending file
     res.setHeader("Content-Type", getContentType(safeFilename));
-    res.setHeader("Cache-Control", "public, max-age=31536000");
+    res.setHeader(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0"
+    );
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
     // Ensure CORS headers are set
     const origin = req.headers.origin;
     if (origin) {
@@ -176,7 +181,10 @@ app.get("/uploads/:filename", async (req, res) => {
             return res.sendFile(path.resolve(uploadPath), {
               headers: {
                 "Content-Type": getContentType(safeFilename),
-                "Cache-Control": "public, max-age=31536000",
+                "Cache-Control":
+                  "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+                Pragma: "no-cache",
+                Expires: "0",
               },
             });
           }
@@ -193,7 +201,10 @@ app.get("/uploads/:filename", async (req, res) => {
           return res.sendFile(path.resolve(fullPath), {
             headers: {
               "Content-Type": getContentType(safeFilename),
-              "Cache-Control": "public, max-age=31536000",
+              "Cache-Control":
+                "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+              Pragma: "no-cache",
+              Expires: "0",
             },
           });
         }
@@ -213,7 +224,10 @@ app.get("/uploads/:filename", async (req, res) => {
             return res.sendFile(path.resolve(fullPath), {
               headers: {
                 "Content-Type": getContentType(safeFilename),
-                "Cache-Control": "public, max-age=31536000",
+                "Cache-Control":
+                  "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+                Pragma: "no-cache",
+                Expires: "0",
               },
             });
           }

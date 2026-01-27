@@ -5,6 +5,10 @@ const pool = require('../database/connection');
 const upload = require('../middleware/upload');
 const { authenticateToken } = require('../middleware/auth');
 const { authLimiter, validateString, validateInteger } = require('../middleware/security');
+const {
+  addSubscriber,
+  removeSubscriber,
+} = require("../utils/pendingStatusStream");
 const router = express.Router();
 
 // Register new user
@@ -69,6 +73,20 @@ router.post('/register', authLimiter, upload.uploadMultiple, async (req, res) =>
       'SELECT id, status, role, face_image, id_card_front, id_card_back FROM users WHERE id_number = ?',
       [sanitizedIdNumber]
     );
+
+    // Check if email already exists (allow only if it's the same rejected user)
+    const [existingEmail] = await pool.query(
+      'SELECT id, status, role, id_number FROM users WHERE email = ?',
+      [sanitizedEmail]
+    );
+    if (existingEmail.length > 0) {
+      const emailUser = existingEmail[0];
+      const isSameUser = emailUser.id_number === sanitizedIdNumber;
+      const isRejected = emailUser.status === 'REJECTED';
+      if (emailUser.role === 'ADMIN' || !isSameUser || !isRejected) {
+        return res.status(400).json({ error: 'Email already registered' });
+      }
+    }
 
     // Hash password with higher rounds for production
     const saltRounds = process.env.NODE_ENV === 'production' ? 12 : 10;
@@ -231,7 +249,32 @@ router.post('/register', authLimiter, upload.uploadMultiple, async (req, res) =>
   } catch (error) {
     // Don't log sensitive information
     console.error('Registration error:', error.message);
-    res.status(500).json({ error: 'Registration failed' });
+    let statusCode = 500;
+    let message = 'Registration failed';
+
+    if (error?.code === 'ER_DUP_ENTRY') {
+      statusCode = 409;
+      if (/email/i.test(error?.message || error?.sqlMessage || '')) {
+        message = 'Email already registered';
+      } else if (/id_number/i.test(error?.message || error?.sqlMessage || '')) {
+        message = 'ID number already registered';
+      } else {
+        message = 'Duplicate value already exists';
+      }
+    } else if (error?.code === 'ER_DATA_TOO_LONG') {
+      statusCode = 400;
+      message = 'Input value too long';
+    } else if (error?.code === 'ER_TRUNCATED_WRONG_VALUE') {
+      statusCode = 400;
+      message = 'Invalid input value';
+    }
+
+    const responseBody = { error: message };
+    if (process.env.NODE_ENV !== 'production' && error?.message) {
+      responseBody.details = error.message;
+    }
+
+    res.status(statusCode).json(responseBody);
   }
 });
 
@@ -396,6 +439,68 @@ router.post('/check-status', authLimiter, async (req, res) => {
   } catch (error) {
     console.error('Check status error:', error);
     res.status(500).json({ error: 'Failed to check status' });
+  }
+});
+
+// Stream user status updates by ID number (SSE)
+router.get("/status-stream/:idNumber", async (req, res) => {
+  try {
+    const { idNumber } = req.params;
+
+    const sanitizedIdNumber = validateString(idNumber, 50);
+    if (!sanitizedIdNumber) {
+      return res.status(400).json({ error: "Invalid ID number format" });
+    }
+
+    const origin = req.headers.origin;
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    if (typeof res.flushHeaders === "function") {
+      res.flushHeaders();
+    }
+
+    const [result] = await pool.query(
+      "SELECT status FROM users WHERE id_number = ?",
+      [sanitizedIdNumber]
+    );
+
+    if (result.length === 0) {
+      res.write(
+        `event: error\ndata: ${JSON.stringify({ error: "User not found" })}\n\n`
+      );
+      return res.end();
+    }
+
+    const status = (result[0].status || "").toUpperCase();
+    res.write(`event: status\ndata: ${JSON.stringify({ status })}\n\n`);
+
+    if (status !== "PENDING") {
+      return res.end();
+    }
+
+    addSubscriber(sanitizedIdNumber, res);
+
+    const keepAliveInterval = setInterval(() => {
+      res.write(": keep-alive\n\n");
+    }, 25000);
+
+    req.on("close", () => {
+      clearInterval(keepAliveInterval);
+      removeSubscriber(sanitizedIdNumber, res);
+    });
+  } catch (error) {
+    console.error("Status stream error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to stream status" });
+      return;
+    }
+    res.end();
   }
 });
 

@@ -14,7 +14,7 @@ const getClientIp = (req) => {
 };
 
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 5 * 60 * 1000, // 5 minutes
   max: isDevelopment ? 100 : 20, // More lenient in development (100), stricter in production (20)
   message: 'Too many login attempts, please try again later.',
   standardHeaders: true,
