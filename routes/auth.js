@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const nodemailer = require("nodemailer");
+const multer = require("multer");
 const pool = require("../database/connection");
 const upload = require("../middleware/upload");
 const { authenticateToken } = require("../middleware/auth");
@@ -19,6 +20,35 @@ const {
   sendTelegramUserRegistrationNotification,
 } = require("../utils/telegramNotify");
 const router = express.Router();
+
+const handleRegistrationUpload = (req, res, next) => {
+  upload.uploadMultiple(req, res, (err) => {
+    if (!err) return next();
+
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res
+          .status(400)
+          .json({ error: "Each image must be 5MB or smaller" });
+      }
+      if (err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE") {
+        return res.status(400).json({
+          error: "Please upload face, ID front, and ID back images only",
+        });
+      }
+      if (err.code === "LIMIT_FIELD_SIZE" || err.code === "LIMIT_FIELD_VALUE") {
+        return res.status(400).json({ error: "Form data is too large" });
+      }
+      return res.status(400).json({ error: "Image upload failed" });
+    }
+
+    if (err?.message) {
+      return res.status(400).json({ error: err.message });
+    }
+
+    return res.status(400).json({ error: "Image upload failed" });
+  });
+};
 
 let smtpTransport = null;
 
@@ -97,7 +127,7 @@ const sendResetEmail = async (toEmail, resetUrl) => {
 router.post(
   "/register",
   authLimiter,
-  upload.uploadMultiple,
+  handleRegistrationUpload,
   async (req, res) => {
     try {
       const { phoneNumber, nickname, email, idNumber, password } = req.body;
