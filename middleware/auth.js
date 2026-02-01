@@ -4,7 +4,10 @@ const pool = require('../database/connection');
 const authenticateToken = async (req, res, next) => {
   try {
     const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
+    const headerToken = authHeader && authHeader.split(' ')[1];
+    const queryToken =
+      typeof req.query.token === 'string' ? req.query.token : null;
+    const token = headerToken || queryToken;
 
     if (!token) {
       return res.status(401).json({ error: 'Access token required' });

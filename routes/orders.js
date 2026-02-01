@@ -3,6 +3,14 @@ const pool = require("../database/connection");
 const { authenticateToken, requireAdmin } = require("../middleware/auth");
 const { orderLimiter, validateInteger } = require("../middleware/security");
 const { uploadOrderPhoto } = require("../middleware/upload");
+const {
+  addSubscriber,
+  removeSubscriber,
+  notifyNewOrder,
+} = require("../utils/orderStream");
+const {
+  sendTelegramOrderNotification,
+} = require("../utils/telegramNotify");
 const router = express.Router();
 
 // Available diamond packages (fixed options)
@@ -191,12 +199,27 @@ router.post(
       );
       const newOrder = result;
 
+      const [requesterResult] = await connection.query(
+        `SELECT name, nickname, id_number FROM users WHERE id = ?`,
+        [userId]
+      );
+      const requester = requesterResult[0] || null;
+
       connection.release();
 
       // Log without sensitive data
       console.log(
         `Order created: ${orderNumber}, User ID: ${userId}, Diamonds: ${totalDiamonds}`
       );
+
+      try {
+        notifyNewOrder(newOrder[0]);
+      } catch (notifyError) {
+        console.warn("Failed to notify new order:", notifyError);
+      }
+      sendTelegramOrderNotification(newOrder[0], requester).catch((notifyError) => {
+        console.warn("Failed to send Telegram order notification:", notifyError);
+      });
 
       res.status(201).json({
         message: "Diamond request submitted successfully",
@@ -216,12 +239,34 @@ router.post(
 // Get user's orders (Parent User's submitted orders)
 router.get("/my-orders", authenticateToken, async (req, res) => {
   try {
+    const statusFilter =
+      typeof req.query.status === "string" ? req.query.status.trim() : null;
+    const clientImoId =
+      typeof req.query.clientImoId === "string"
+        ? req.query.clientImoId.trim()
+        : null;
+
+    const conditions = ["o.user_id = ?"];
+    const params = [req.user.id];
+
+    if (statusFilter) {
+      conditions.push("UPPER(TRIM(o.status)) = ?");
+      params.push(statusFilter.toUpperCase());
+    }
+
+    if (clientImoId) {
+      conditions.push("COALESCE(TRIM(o.client_imo_id), '') = ?");
+      params.push(clientImoId);
+    }
+
+    const whereClause = conditions.join(" AND ");
     const [result] = await pool.query(
-      `SELECT o.*, u.email as parent_user_email FROM orders o 
+      `SELECT o.*, UPPER(TRIM(o.status)) AS status,
+       u.email as parent_user_email FROM orders o 
        LEFT JOIN users u ON o.user_id = u.id
-       WHERE o.user_id = ? 
+       WHERE ${whereClause}
        ORDER BY o.created_at DESC`,
-      [req.user.id]
+      params
     );
 
     res.json({ orders: result || [] });
@@ -256,6 +301,71 @@ router.get("/pending", authenticateToken, requireAdmin, async (req, res) => {
       });
   }
 });
+
+// Get all rejected orders (Admin only)
+router.get("/rejected", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const [result] = await pool.query(
+      `SELECT o.*, 
+       u.name as parent_user_name, u.id_number as parent_user_id_number, u.email as parent_user_email
+       FROM orders o
+       LEFT JOIN users u ON o.user_id = u.id
+       WHERE o.status = 'REJECTED'
+       ORDER BY o.created_at DESC`
+    );
+
+    res.json({ orders: result || [] });
+  } catch (error) {
+    console.error("Get rejected orders error:", error);
+    res
+      .status(500)
+      .json({
+        error: "Failed to fetch rejected orders",
+        details: error.message,
+      });
+  }
+});
+
+// Stream new pending orders to admins (SSE)
+router.get(
+  "/pending-stream",
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const origin = req.headers.origin;
+      res.setHeader("Access-Control-Allow-Origin", origin || "*");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      if (typeof res.flushHeaders === "function") {
+        res.flushHeaders();
+      }
+
+      addSubscriber(res);
+
+      const keepAliveInterval = setInterval(() => {
+        res.write(": keep-alive\n\n");
+      }, 25000);
+
+      req.on("close", () => {
+        clearInterval(keepAliveInterval);
+        removeSubscriber(res);
+      });
+    } catch (error) {
+      console.error("Pending orders stream error:", error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to stream orders" });
+        return;
+      }
+      res.end();
+    }
+  }
+);
 
 // Update order status (Admin only)
 router.patch(

@@ -38,6 +38,20 @@ const validateEnv = () => {
     warnings.push('Database password not set');
   }
 
+  if (!process.env.FRONTEND_URL) {
+    warnings.push('FRONTEND_URL not set (password reset links will be wrong)');
+  }
+
+  if (
+    !process.env.SMTP_HOST ||
+    !process.env.SMTP_PORT ||
+    !process.env.SMTP_FROM
+  ) {
+    warnings.push(
+      'SMTP is not fully configured (password reset emails will fail)'
+    );
+  }
+
   if (warnings.length > 0) {
     console.warn('⚠️  Security Warnings:');
     warnings.forEach(warning => console.warn('  -', warning));
