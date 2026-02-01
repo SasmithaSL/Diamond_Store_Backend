@@ -15,6 +15,9 @@ const {
   addSubscriber,
   removeSubscriber,
 } = require("../utils/pendingStatusStream");
+const {
+  sendTelegramUserRegistrationNotification,
+} = require("../utils/telegramNotify");
 const router = express.Router();
 
 let smtpTransport = null;
@@ -350,10 +353,26 @@ router.post(
           [existing.id]
         );
 
-        return res.status(201).json({
+        const responseBody = {
           message: "Registration updated. Waiting for admin approval.",
           user: result[0],
-        });
+        };
+
+        try {
+          await sendTelegramUserRegistrationNotification({
+            ...result[0],
+            email: sanitizedEmail,
+            phone_number: sanitizedPhoneNumber,
+            nickname: sanitizedNickname,
+          });
+        } catch (notifyError) {
+          console.warn(
+            "[Register] Telegram notification failed:",
+            notifyError?.message || notifyError
+          );
+        }
+
+        return res.status(201).json(responseBody);
       }
 
       // Insert new user
@@ -380,10 +399,26 @@ router.post(
         [insertResult.insertId]
       );
 
-      res.status(201).json({
+      const responseBody = {
         message: "Registration successful. Waiting for admin approval.",
         user: result[0],
-      });
+      };
+
+      try {
+        await sendTelegramUserRegistrationNotification({
+          ...result[0],
+          email: sanitizedEmail,
+          phone_number: sanitizedPhoneNumber,
+          nickname: sanitizedNickname,
+        });
+      } catch (notifyError) {
+        console.warn(
+          "[Register] Telegram notification failed:",
+          notifyError?.message || notifyError
+        );
+      }
+
+      res.status(201).json(responseBody);
     } catch (error) {
       // Don't log sensitive information
       console.error("Registration error:", error.message);

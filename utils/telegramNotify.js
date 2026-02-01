@@ -84,6 +84,36 @@ function sendTelegramOrderNotification(order, requester) {
   return sendTelegramMessage(message);
 }
 
+function formatUserRegistrationMessage(user) {
+  if (!user) {
+    return "New user registration submitted.";
+  }
+
+  const nickname = user.nickname;
+  const name = user.name;
+  const email = user.email;
+  const idNumber = user.id_number;
+  const phoneNumber = user.phone_number;
+  const displayName =
+    nickname && name && nickname !== name ? `${nickname} (${name})` : nickname || name;
+
+  const lines = [
+    "New user registration submitted",
+    displayName ? `Name: ${displayName}` : null,
+    email ? `Email: ${email}` : null,
+    idNumber ? `ID Number: ${idNumber}` : null,
+    phoneNumber ? `Phone: ${phoneNumber}` : null,
+  ].filter(Boolean);
+
+  return lines.join("\n");
+}
+
+function sendTelegramUserRegistrationNotification(user) {
+  const message = formatUserRegistrationMessage(user);
+  return sendTelegramMessage(message);
+}
+
 module.exports = {
   sendTelegramOrderNotification,
+  sendTelegramUserRegistrationNotification,
 };
