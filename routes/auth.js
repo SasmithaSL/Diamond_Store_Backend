@@ -21,6 +21,19 @@ const {
 } = require("../utils/telegramNotify");
 const router = express.Router();
 
+const SALT_ROUNDS = 10;
+
+const notifyRegistrationAsync = (payload) => {
+  setImmediate(() => {
+    sendTelegramUserRegistrationNotification(payload).catch((err) => {
+      console.warn(
+        "[Register] Telegram notification failed:",
+        err?.message || err
+      );
+    });
+  });
+};
+
 const handleRegistrationUpload = (req, res, next) => {
   upload.uploadMultiple(req, res, (err) => {
     if (!err) return next();
@@ -215,8 +228,7 @@ router.post(
       }
 
       // Hash password with higher rounds for production
-      const saltRounds = process.env.NODE_ENV === "production" ? 12 : 10;
-      const passwordHash = await bcrypt.hash(password, saltRounds);
+      const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
 
       // Get uploaded file paths (normalize to relative paths)
       const path = require("path");
@@ -388,19 +400,12 @@ router.post(
           user: result[0],
         };
 
-        try {
-          await sendTelegramUserRegistrationNotification({
-            ...result[0],
-            email: sanitizedEmail,
-            phone_number: sanitizedPhoneNumber,
-            nickname: sanitizedNickname,
-          });
-        } catch (notifyError) {
-          console.warn(
-            "[Register] Telegram notification failed:",
-            notifyError?.message || notifyError
-          );
-        }
+        notifyRegistrationAsync({
+          ...result[0],
+          email: sanitizedEmail,
+          phone_number: sanitizedPhoneNumber,
+          nickname: sanitizedNickname,
+        });
 
         return res.status(201).json(responseBody);
       }
@@ -434,19 +439,12 @@ router.post(
         user: result[0],
       };
 
-      try {
-        await sendTelegramUserRegistrationNotification({
-          ...result[0],
-          email: sanitizedEmail,
-          phone_number: sanitizedPhoneNumber,
-          nickname: sanitizedNickname,
-        });
-      } catch (notifyError) {
-        console.warn(
-          "[Register] Telegram notification failed:",
-          notifyError?.message || notifyError
-        );
-      }
+      notifyRegistrationAsync({
+        ...result[0],
+        email: sanitizedEmail,
+        phone_number: sanitizedPhoneNumber,
+        nickname: sanitizedNickname,
+      });
 
       res.status(201).json(responseBody);
     } catch (error) {
