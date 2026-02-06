@@ -1,13 +1,26 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../database/connection');
 
+const getTokenFromCookies = (req) => {
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) return null;
+  const cookies = cookieHeader.split(';').map((part) => part.trim());
+  for (const cookie of cookies) {
+    if (cookie.startsWith('token=')) {
+      return decodeURIComponent(cookie.substring('token='.length));
+    }
+  }
+  return null;
+};
+
 const authenticateToken = async (req, res, next) => {
   try {
     const authHeader = req.headers['authorization'];
     const headerToken = authHeader && authHeader.split(' ')[1];
     const queryToken =
       typeof req.query.token === 'string' ? req.query.token : null;
-    const token = headerToken || queryToken;
+    const cookieToken = getTokenFromCookies(req);
+    const token = headerToken || cookieToken || queryToken;
 
     if (!token) {
       return res.status(401).json({ error: 'Access token required' });

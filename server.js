@@ -39,25 +39,19 @@ app.use(
 );
 
 // CORS configuration - restrict to your frontend domains in production
-const defaultAllowedOrigins = [
-  "http://localhost:3000",
-  "http://localhost:3001",
-  "http://154.19.187.78:3000",
-  "http://154.19.187.78:3001",
-];
-
-const allowedOriginsFromEnv = (process.env.ALLOWED_ORIGINS || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+const { getAllowedOrigin } = require("./utils/cors");
 
 const corsOptions = {
-  origin:
-    process.env.NODE_ENV === "production"
-      ? allowedOriginsFromEnv.length > 0
-        ? allowedOriginsFromEnv
-        : defaultAllowedOrigins
-      : defaultAllowedOrigins,
+  origin: (origin, callback) => {
+    if (!origin) {
+      return callback(null, true);
+    }
+    const allowedOrigin = getAllowedOrigin(origin);
+    if (allowedOrigin) {
+      return callback(null, true);
+    }
+    return callback(new Error("Origin not allowed by CORS"));
+  },
   credentials: true,
   optionsSuccessStatus: 200,
 };
@@ -106,11 +100,14 @@ app.get("/uploads/:filename", async (req, res) => {
 
   // Set CORS headers for image requests (must be set before sending response)
   const origin = req.headers.origin;
-  if (origin) {
-    res.header("Access-Control-Allow-Origin", origin);
-  } else {
-    res.header("Access-Control-Allow-Origin", "*");
+  const allowedOrigin = getAllowedOrigin(origin);
+  if (origin && !allowedOrigin) {
+    return res.status(403).json({ error: "Origin not allowed" });
   }
+  if (allowedOrigin) {
+    res.header("Access-Control-Allow-Origin", allowedOrigin);
+  }
+  res.header("Vary", "Origin");
   res.header("Access-Control-Allow-Credentials", "true");
   res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type");
@@ -133,11 +130,11 @@ app.get("/uploads/:filename", async (req, res) => {
     res.setHeader("Expires", "0");
     // Ensure CORS headers are set
     const origin = req.headers.origin;
-    if (origin) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-    } else {
-      res.setHeader("Access-Control-Allow-Origin", "*");
+    const allowedOrigin = getAllowedOrigin(origin);
+    if (allowedOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
     }
+    res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Credentials", "true");
     return res.sendFile(path.resolve(filePath));
   }
@@ -238,21 +235,21 @@ app.get("/uploads/:filename", async (req, res) => {
     console.log(`[Image Request] ✗ File not found: ${safeFilename}`);
     // Set CORS headers even for 404
     const origin = req.headers.origin;
-    if (origin) {
-      res.header("Access-Control-Allow-Origin", origin);
-    } else {
-      res.header("Access-Control-Allow-Origin", "*");
+    const allowedOrigin = getAllowedOrigin(origin);
+    if (allowedOrigin) {
+      res.header("Access-Control-Allow-Origin", allowedOrigin);
     }
+    res.header("Vary", "Origin");
     res.status(404).json({ error: "Image not found", filename: safeFilename });
   } catch (err) {
     console.error("[Image Request] Error:", err);
     // Set CORS headers even for errors
     const origin = req.headers.origin;
-    if (origin) {
-      res.header("Access-Control-Allow-Origin", origin);
-    } else {
-      res.header("Access-Control-Allow-Origin", "*");
+    const allowedOrigin = getAllowedOrigin(origin);
+    if (allowedOrigin) {
+      res.header("Access-Control-Allow-Origin", allowedOrigin);
     }
+    res.header("Vary", "Origin");
     res
       .status(500)
       .json({ error: "Error serving image", details: err.message });
@@ -262,11 +259,11 @@ app.get("/uploads/:filename", async (req, res) => {
 // Handle OPTIONS requests for CORS preflight
 app.options("/uploads/:filename", (req, res) => {
   const origin = req.headers.origin;
-  if (origin) {
-    res.header("Access-Control-Allow-Origin", origin);
-  } else {
-    res.header("Access-Control-Allow-Origin", "*");
+  const allowedOrigin = getAllowedOrigin(origin);
+  if (allowedOrigin) {
+    res.header("Access-Control-Allow-Origin", allowedOrigin);
   }
+  res.header("Vary", "Origin");
   res.header("Access-Control-Allow-Credentials", "true");
   res.header("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type");
@@ -279,11 +276,11 @@ app.use(
   (req, res, next) => {
     // Set CORS headers for static files
     const origin = req.headers.origin;
-    if (origin) {
-      res.header("Access-Control-Allow-Origin", origin);
-    } else {
-      res.header("Access-Control-Allow-Origin", "*");
+    const allowedOrigin = getAllowedOrigin(origin);
+    if (allowedOrigin) {
+      res.header("Access-Control-Allow-Origin", allowedOrigin);
     }
+    res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
     next();
   },

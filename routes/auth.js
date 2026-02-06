@@ -16,12 +16,35 @@ const {
   addSubscriber,
   removeSubscriber,
 } = require("../utils/pendingStatusStream");
+const { getAllowedOrigin } = require("../utils/cors");
 const {
   sendTelegramUserRegistrationNotification,
 } = require("../utils/telegramNotify");
 const router = express.Router();
 
 const SALT_ROUNDS = 10;
+const STATUS_TOKEN_EXPIRES_MINUTES = Number(
+  process.env.STATUS_TOKEN_EXPIRES_MINUTES || 120
+);
+
+const getStatusTokenSecret = () =>
+  process.env.STATUS_TOKEN_SECRET || process.env.JWT_SECRET;
+
+const createStatusToken = (idNumber) => {
+  const secret = getStatusTokenSecret();
+  return jwt.sign({ idNumber, scope: "status" }, secret, {
+    expiresIn: `${STATUS_TOKEN_EXPIRES_MINUTES}m`,
+  });
+};
+
+const decodeStatusToken = (token) => {
+  const secret = getStatusTokenSecret();
+  const decoded = jwt.verify(token, secret);
+  if (!decoded || decoded.scope !== "status" || !decoded.idNumber) {
+    throw new Error("INVALID_STATUS_TOKEN");
+  }
+  return decoded;
+};
 
 const notifyRegistrationAsync = (payload) => {
   setImmediate(() => {
@@ -398,6 +421,7 @@ router.post(
         const responseBody = {
           message: "Registration updated. Waiting for admin approval.",
           user: result[0],
+          statusToken: createStatusToken(result[0].id_number),
         };
 
         notifyRegistrationAsync({
@@ -437,6 +461,7 @@ router.post(
       const responseBody = {
         message: "Registration successful. Waiting for admin approval.",
         user: result[0],
+        statusToken: createStatusToken(result[0].id_number),
       };
 
       notifyRegistrationAsync({
@@ -661,7 +686,7 @@ router.post("/forgot-password", authLimiter, async (req, res) => {
       [user.id, tokenHash, expiresAt]
     );
 
-    const resetUrl = `${frontendUrl}/reset-password?token=${resetToken}`;
+    const resetUrl = `${frontendUrl}/reset-password#token=${resetToken}`;
 
     await sendResetEmail(user.email, resetUrl);
 
@@ -797,16 +822,29 @@ const normalizeImagePath = (imagePath) => {
   return basename;
 };
 
-// Check user status by ID number (public endpoint for pending page)
+// Check user status using a short-lived status token
 router.post("/check-status", authLimiter, async (req, res) => {
   try {
-    const { idNumber } = req.body;
+    const { statusToken, idNumber } = req.body;
+    let resolvedIdNumber = null;
 
-    if (!idNumber || typeof idNumber !== "string" || idNumber.trim() === "") {
-      return res.status(400).json({ error: "ID number is required" });
+    if (statusToken && typeof statusToken === "string") {
+      try {
+        const decoded = decodeStatusToken(statusToken);
+        resolvedIdNumber = decoded.idNumber;
+      } catch (error) {
+        return res.status(401).json({ error: "Invalid status token" });
+      }
+    } else if (process.env.ALLOW_PUBLIC_STATUS_CHECK === "true") {
+      if (!idNumber || typeof idNumber !== "string" || idNumber.trim() === "") {
+        return res.status(400).json({ error: "ID number is required" });
+      }
+      resolvedIdNumber = idNumber;
+    } else {
+      return res.status(400).json({ error: "Status token is required" });
     }
 
-    const sanitizedIdNumber = validateString(idNumber, 50);
+    const sanitizedIdNumber = validateString(resolvedIdNumber, 50);
     if (!sanitizedIdNumber) {
       return res.status(400).json({ error: "Invalid ID number format" });
     }
@@ -830,21 +868,38 @@ router.post("/check-status", authLimiter, async (req, res) => {
   }
 });
 
-// Stream user status updates by ID number (SSE)
-router.get("/status-stream/:idNumber", async (req, res) => {
+// Stream user status updates by status token (SSE)
+router.get("/status-stream", async (req, res) => {
   try {
-    const { idNumber } = req.params;
+    const rawToken = typeof req.query.token === "string" ? req.query.token : "";
+    if (!rawToken) {
+      return res.status(400).json({ error: "Status token is required" });
+    }
 
-    const sanitizedIdNumber = validateString(idNumber, 50);
+    let sanitizedIdNumber = null;
+    try {
+      const decoded = decodeStatusToken(rawToken);
+      sanitizedIdNumber = validateString(decoded.idNumber, 50);
+    } catch (error) {
+      return res.status(401).json({ error: "Invalid status token" });
+    }
+
     if (!sanitizedIdNumber) {
       return res.status(400).json({ error: "Invalid ID number format" });
     }
 
     const origin = req.headers.origin;
-    res.setHeader("Access-Control-Allow-Origin", origin || "*");
+    const allowedOrigin = getAllowedOrigin(origin);
+    if (origin && !allowedOrigin) {
+      return res.status(403).json({ error: "Origin not allowed" });
+    }
+    if (allowedOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+    }
+    res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
@@ -890,6 +945,11 @@ router.get("/status-stream/:idNumber", async (req, res) => {
     }
     res.end();
   }
+});
+
+// Deprecated: do not expose ID numbers in the URL
+router.get("/status-stream/:idNumber", (req, res) => {
+  res.status(400).json({ error: "Status token is required" });
 });
 
 // Get current user profile

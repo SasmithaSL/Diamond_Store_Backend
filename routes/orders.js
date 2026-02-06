@@ -8,6 +8,7 @@ const {
   removeSubscriber,
   notifyNewOrder,
 } = require("../utils/orderStream");
+const { getAllowedOrigin } = require("../utils/cors");
 const {
   sendTelegramOrderNotification,
 } = require("../utils/telegramNotify");
@@ -334,10 +335,17 @@ router.get(
   async (req, res) => {
     try {
       const origin = req.headers.origin;
-      res.setHeader("Access-Control-Allow-Origin", origin || "*");
+      const allowedOrigin = getAllowedOrigin(origin);
+      if (origin && !allowedOrigin) {
+        return res.status(403).json({ error: "Origin not allowed" });
+      }
+      if (allowedOrigin) {
+        res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+      }
+      res.setHeader("Vary", "Origin");
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
