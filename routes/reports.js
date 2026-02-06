@@ -205,32 +205,80 @@ router.get("/weekly", authenticateToken, requireAdmin, async (req, res) => {
         })()
       : null;
 
-    let userCondition = "";
-    let queryParams = [weekStartStr, weekEndStr];
+    const ordersUserCondition = userId ? "AND o.user_id = ?" : "";
+    const transactionsUserCondition = userId ? "AND t.user_id = ?" : "";
 
-    if (userId) {
-      userCondition = "AND o.user_id = ?";
-      queryParams.push(userId);
-    }
+    const summaryParams = [
+      weekStartStr,
+      weekEndStr,
+      ...(userId ? [userId] : []),
+      weekStartStr,
+      weekEndStr,
+      ...(userId ? [userId] : []),
+      weekStartStr,
+      weekEndStr,
+      ...(userId ? [userId] : []),
+      weekStartStr,
+      weekEndStr,
+      ...(userId ? [userId] : []),
+      weekStartStr,
+      weekEndStr,
+      ...(userId ? [userId] : []),
+    ];
 
     const [summaryResult] = await pool.query(
       `SELECT 
-        COUNT(DISTINCT o.user_id) as total_users,
-        COUNT(DISTINCT o.id) as total_orders,
-        COALESCE(SUM(o.diamond_amount * COALESCE(o.quantity, 1)), 0) as total_sales,
-        COALESCE(SUM(CASE WHEN pt.transaction_type = 'ADDED' AND pt.description LIKE 'Weekly Sale Reward%' THEN pt.amount ELSE 0 END), 0) as total_rewards
-      FROM orders o
-      LEFT JOIN transactions pt ON pt.user_id = o.user_id 
-        AND pt.created_at >= ? 
-        AND pt.created_at < ?
-        AND pt.transaction_type = 'ADDED'
-        AND pt.description LIKE 'Weekly Sale Reward%'
-      WHERE o.status = 'COMPLETED'
-        AND o.created_at >= ?
-        AND o.created_at < ?
-        ${userCondition}`,
-      [...queryParams, weekStartStr, weekEndStr]
+        (SELECT COUNT(DISTINCT o.user_id)
+         FROM orders o
+         WHERE o.status = 'COMPLETED'
+           AND o.created_at >= ?
+           AND o.created_at < ?
+           ${ordersUserCondition}) as total_users,
+        (SELECT COUNT(DISTINCT o.id)
+         FROM orders o
+         WHERE o.status = 'COMPLETED'
+           AND o.created_at >= ?
+           AND o.created_at < ?
+           ${ordersUserCondition}) as total_orders,
+        (SELECT COALESCE(SUM(o.diamond_amount * COALESCE(o.quantity, 1)), 0)
+         FROM orders o
+         WHERE o.status = 'COMPLETED'
+           AND o.created_at >= ?
+           AND o.created_at < ?
+           ${ordersUserCondition}) as total_sales,
+        (SELECT COALESCE(SUM(t.amount), 0)
+         FROM transactions t
+         WHERE t.created_at >= ?
+           AND t.created_at < ?
+           AND t.transaction_type = 'ADDED'
+           AND t.description LIKE 'Weekly Sale Reward%'
+           ${transactionsUserCondition}) as total_rewards,
+        (SELECT COALESCE(SUM(t.amount), 0)
+         FROM transactions t
+         WHERE t.created_at >= ?
+           AND t.created_at < ?
+           AND t.transaction_type = 'ADDED'
+           AND t.admin_id IS NOT NULL
+           AND (t.description IS NULL OR t.description NOT LIKE 'Weekly Sale Reward%')
+           ${transactionsUserCondition}) as total_admin_points`,
+      summaryParams
     );
+
+    const ordersParams = [
+      weekStartStr,
+      weekEndStr,
+      ...(userId ? [userId] : []),
+    ];
+    const rewardsParams = [
+      weekStartStr,
+      weekEndStr,
+      ...(userId ? [userId] : []),
+    ];
+    const adminPointsParams = [
+      weekStartStr,
+      weekEndStr,
+      ...(userId ? [userId] : []),
+    ];
 
     const [userBreakdown] = await pool.query(
       `SELECT 
@@ -239,23 +287,50 @@ router.get("/weekly", authenticateToken, requireAdmin, async (req, res) => {
         u.nickname,
         u.id_number,
         u.email,
-        COUNT(DISTINCT o.id) as order_count,
-        COALESCE(SUM(o.diamond_amount * COALESCE(o.quantity, 1)), 0) as user_sales,
-        COALESCE(SUM(CASE WHEN pt.transaction_type = 'ADDED' AND pt.description LIKE 'Weekly Sale Reward%' THEN pt.amount ELSE 0 END), 0) as user_reward
-      FROM orders o
+        o.order_count,
+        o.user_sales,
+        COALESCE(r.user_reward, 0) as user_reward,
+        COALESCE(a.admin_added_points, 0) as admin_added_points
+      FROM (
+        SELECT 
+          user_id,
+          COUNT(DISTINCT id) as order_count,
+          COALESCE(SUM(diamond_amount * COALESCE(quantity, 1)), 0) as user_sales
+        FROM orders
+        WHERE status = 'COMPLETED'
+          AND created_at >= ?
+          AND created_at < ?
+          ${userId ? "AND user_id = ?" : ""}
+        GROUP BY user_id
+      ) o
       INNER JOIN users u ON u.id = o.user_id
-      LEFT JOIN transactions pt ON pt.user_id = o.user_id 
-        AND pt.created_at >= ? 
-        AND pt.created_at < ?
-        AND pt.transaction_type = 'ADDED'
-        AND pt.description LIKE 'Weekly Sale Reward%'
-      WHERE o.status = 'COMPLETED'
-        AND o.created_at >= ?
-        AND o.created_at < ?
-        ${userCondition}
-      GROUP BY u.id, u.name, u.nickname, u.id_number, u.email
-      ORDER BY user_sales DESC`,
-      [...queryParams, weekStartStr, weekEndStr]
+      LEFT JOIN (
+        SELECT 
+          user_id,
+          COALESCE(SUM(amount), 0) as user_reward
+        FROM transactions
+        WHERE created_at >= ?
+          AND created_at < ?
+          AND transaction_type = 'ADDED'
+          AND description LIKE 'Weekly Sale Reward%'
+          ${userId ? "AND user_id = ?" : ""}
+        GROUP BY user_id
+      ) r ON r.user_id = o.user_id
+      LEFT JOIN (
+        SELECT 
+          user_id,
+          COALESCE(SUM(amount), 0) as admin_added_points
+        FROM transactions
+        WHERE created_at >= ?
+          AND created_at < ?
+          AND transaction_type = 'ADDED'
+          AND admin_id IS NOT NULL
+          AND (description IS NULL OR description NOT LIKE 'Weekly Sale Reward%')
+          ${userId ? "AND user_id = ?" : ""}
+        GROUP BY user_id
+      ) a ON a.user_id = o.user_id
+      ORDER BY o.user_sales DESC`,
+      [...ordersParams, ...rewardsParams, ...adminPointsParams]
     );
 
     // Get all weeks with data - find the Thursday 21:30 of each week
@@ -294,6 +369,7 @@ router.get("/weekly", authenticateToken, requireAdmin, async (req, res) => {
         total_orders: 0,
         total_sales: 0,
         total_rewards: 0,
+        total_admin_points: 0,
       },
       userBreakdown: userBreakdown || [],
       availableWeeks: weeksResult || [],
