@@ -868,10 +868,16 @@ router.post(
       }
 
       // Record transaction
-      await connection.query(
+      const [transactionResult] = await connection.query(
         `INSERT INTO transactions (user_id, amount, transaction_type, description, admin_id)
          VALUES (?, ?, 'ADDED', ?, ?)`,
         [userId, amount, sanitizedDescription || "Quick Store", req.user.id]
+      );
+
+      const transactionId = transactionResult.insertId;
+      const [transactionRows] = await connection.query(
+        `SELECT id, created_at FROM transactions WHERE id = ?`,
+        [transactionId]
       );
 
       await connection.commit();
@@ -917,6 +923,16 @@ router.post(
           name: result[0].name,
           points_balance: result[0].points_balance,
           role: result[0].role,
+        },
+        receipt: {
+          id: transactionRows[0]?.id || transactionId,
+          user_id: result[0].id,
+          receiver_name: userName,
+          amount: amount,
+          description: sanitizedDescription || "Quick Store",
+          status: "SUCCESS",
+          created_at: transactionRows[0]?.created_at || new Date().toISOString(),
+          admin_name: req.user.name || null,
         },
       });
     } catch (error) {
