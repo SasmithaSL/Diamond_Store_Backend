@@ -1088,7 +1088,7 @@ router.put(
 
       // Get updated user
       const [result] = await pool.query(
-        `SELECT id, name, nickname, id_number, face_image, status, points_balance, role, created_at 
+        `SELECT id, name, nickname, id_number, face_image, status, points_balance, role, created_at, updated_at 
        FROM users WHERE id = ?`,
         [userId]
       );

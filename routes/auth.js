@@ -956,7 +956,7 @@ router.get("/status-stream/:idNumber", (req, res) => {
 router.get("/me", authenticateToken, async (req, res) => {
   try {
     const [result] = await pool.query(
-      `SELECT id, name, nickname, phone_number, id_number, face_image, id_card_front, id_card_back, status, points_balance, role, created_at 
+      `SELECT id, name, nickname, phone_number, id_number, face_image, id_card_front, id_card_back, status, points_balance, role, created_at, updated_at 
        FROM users WHERE id = ?`,
       [req.user.id]
     );
