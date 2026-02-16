@@ -297,6 +297,7 @@ app.use("/api/auth", require("./routes/auth"));
 app.use("/api/users", require("./routes/users"));
 app.use("/api/users/reports", require("./routes/reports"));
 app.use("/api/orders", require("./routes/orders"));
+app.use("/api/announcements", require("./routes/announcements"));
 
 // Health check
 app.get("/api/health", (req, res) => {
