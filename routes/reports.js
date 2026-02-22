@@ -383,4 +383,93 @@ router.get("/weekly", authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
+// Get daily report (Admin only) - summary and user breakdown for a single day
+router.get("/daily", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    let dateStr = req.query.date;
+    if (!dateStr || typeof dateStr !== "string") {
+      const dt = getColomboDateTime();
+      dateStr = `${dt.year}-${String(dt.month + 1).padStart(2, "0")}-${String(dt.day).padStart(2, "0")}`;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      return res.status(400).json({ error: "Invalid date. Use YYYY-MM-DD." });
+    }
+    const dayStart = `${dateStr} 00:00:00`;
+    const dayEnd = `${dateStr} 23:59:59`;
+
+    const [summaryResult] = await pool.query(
+      `SELECT 
+        (SELECT COUNT(DISTINCT user_id) FROM orders WHERE status = 'COMPLETED' AND created_at >= ? AND created_at <= ?) as total_users,
+        (SELECT COUNT(*) FROM orders WHERE status = 'COMPLETED' AND created_at >= ? AND created_at <= ?) as total_orders,
+        (SELECT COALESCE(SUM(diamond_amount * COALESCE(quantity, 1)), 0) FROM orders WHERE status = 'COMPLETED' AND created_at >= ? AND created_at <= ?) as total_sales,
+        (SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE transaction_type = 'ADDED' AND (admin_id IS NOT NULL OR merchant_id IS NOT NULL) AND created_at >= ? AND created_at <= ?) as total_admin_points`,
+      [dayStart, dayEnd, dayStart, dayEnd, dayStart, dayEnd, dayStart, dayEnd]
+    );
+
+    const [userBreakdown] = await pool.query(
+      `SELECT 
+        u.id as user_id,
+        u.name,
+        u.nickname,
+        u.id_number,
+        u.email,
+        o.order_count,
+        o.user_sales,
+        0 as user_reward,
+        COALESCE(a.admin_added_points, 0) as admin_added_points
+      FROM (
+        SELECT 
+          user_id,
+          COUNT(*) as order_count,
+          COALESCE(SUM(diamond_amount * COALESCE(quantity, 1)), 0) as user_sales
+        FROM orders
+        WHERE status = 'COMPLETED'
+          AND created_at >= ?
+          AND created_at <= ?
+        GROUP BY user_id
+      ) o
+      INNER JOIN users u ON u.id = o.user_id
+      LEFT JOIN (
+        SELECT 
+          user_id,
+          COALESCE(SUM(amount), 0) as admin_added_points
+        FROM transactions
+        WHERE created_at >= ?
+          AND created_at <= ?
+          AND transaction_type = 'ADDED'
+          AND (admin_id IS NOT NULL OR merchant_id IS NOT NULL)
+        GROUP BY user_id
+      ) a ON a.user_id = o.user_id
+      ORDER BY o.user_sales DESC`,
+      [dayStart, dayEnd, dayStart, dayEnd]
+    );
+
+    const [datesResult] = await pool.query(
+      `SELECT DISTINCT DATE(created_at) as report_date
+       FROM orders
+       WHERE status = 'COMPLETED'
+       ORDER BY report_date DESC
+       LIMIT 90`
+    );
+
+    res.json({
+      date: dateStr,
+      summary: summaryResult[0] || {
+        total_users: 0,
+        total_orders: 0,
+        total_sales: 0,
+        total_admin_points: 0,
+      },
+      userBreakdown: userBreakdown || [],
+      availableDates: (datesResult || []).map((r) => ({ date: r.report_date })),
+    });
+  } catch (error) {
+    console.error("Daily report error:", error);
+    res.status(500).json({
+      error: "Failed to fetch daily report",
+      details: error.message,
+    });
+  }
+});
+
 module.exports = router;

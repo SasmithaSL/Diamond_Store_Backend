@@ -166,7 +166,7 @@ router.post(
   handleRegistrationUpload,
   async (req, res) => {
     try {
-      const { phoneNumber, nickname, email, idNumber, password } = req.body;
+      const { phoneNumber, nickname, email, idNumber, password, referralCode } = req.body;
 
       // Validate and sanitize inputs
       if (
@@ -247,6 +247,22 @@ router.post(
         const isRejected = emailUser.status === "REJECTED";
         if (emailUser.role === "ADMIN" || !isSameUser || !isRejected) {
           return res.status(400).json({ error: "Email already registered" });
+        }
+      }
+
+      // Optional referral code: must belong to an approved MERCHANT
+      let referredById = null;
+      if (referralCode && typeof referralCode === "string" && referralCode.trim() !== "") {
+        const sanitizedRefCode = validateString(referralCode.trim(), 24);
+        if (sanitizedRefCode) {
+          const [merchantRow] = await pool.query(
+            "SELECT id FROM users WHERE referral_code = ? AND role = 'MERCHANT' AND status = 'APPROVED'",
+            [sanitizedRefCode]
+          );
+          if (merchantRow.length === 0) {
+            return res.status(400).json({ error: "Invalid referral code" });
+          }
+          referredById = merchantRow[0].id;
         }
       }
 
@@ -397,6 +413,7 @@ router.post(
              id_card_back = ?,
              password_hash = ?,
              status = 'PENDING',
+             referred_by_id = ?,
              updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
           [
@@ -408,6 +425,7 @@ router.post(
             idCardFront,
             idCardBack,
             passwordHash,
+            referredById,
             existing.id,
           ]
         );
@@ -436,8 +454,8 @@ router.post(
 
       // Insert new user
       const [insertResult] = await pool.query(
-        `INSERT INTO users (name, nickname, phone_number, email, id_number, face_image, id_card_front, id_card_back, password_hash, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')`,
+        `INSERT INTO users (name, nickname, phone_number, email, id_number, face_image, id_card_front, id_card_back, password_hash, status, referred_by_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)`,
         [
           sanitizedName,
           sanitizedNickname,
@@ -448,6 +466,7 @@ router.post(
           idCardFront,
           idCardBack,
           passwordHash,
+          referredById,
         ]
       );
 

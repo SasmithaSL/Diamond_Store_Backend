@@ -1,7 +1,8 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const pool = require("../database/connection");
-const { authenticateToken, requireAdmin } = require("../middleware/auth");
+const { authenticateToken, requireAdmin, requireMerchant } = require("../middleware/auth");
+const crypto = require("crypto");
 const upload = require("../middleware/upload");
 const { validateString } = require("../middleware/security");
 const { notifyStatus } = require("../utils/pendingStatusStream");
@@ -306,7 +307,7 @@ router.get("/dashboard", authenticateToken, async (req, res) => {
 
     // Get user info (removed sensitive logging)
     let [userResult] = await pool.query(
-      `SELECT id, name, nickname, id_number, face_image, points_balance, status, created_at 
+      `SELECT id, name, nickname, id_number, face_image, points_balance, status, role, referral_code, created_at 
        FROM users WHERE id = ?`,
       [userId]
     );
@@ -661,7 +662,7 @@ router.get("/dashboard", authenticateToken, async (req, res) => {
 
         // Refresh user data to get updated balance
         const [updatedUserResult] = await pool.query(
-          `SELECT id, name, nickname, id_number, face_image, points_balance, status, role, created_at, updated_at 
+          `SELECT id, name, nickname, id_number, face_image, points_balance, status, role, referral_code, created_at, updated_at 
            FROM users 
            WHERE id = ?`,
           [userId]
@@ -712,14 +713,17 @@ router.get("/dashboard", authenticateToken, async (req, res) => {
   }
 });
 
-// Get all pending users (Admin only)
+// Get all pending users (Admin only) - include referrer (merchant) when joined via referral
 router.get("/pending", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const [result] = await pool.query(
-      `SELECT id, name, nickname, email, id_number, face_image, status, created_at 
-       FROM users 
-       WHERE status = 'PENDING' 
-       ORDER BY created_at DESC`
+      `SELECT u.id, u.name, u.nickname, u.email, u.id_number, u.face_image, u.status, u.created_at,
+              u.referred_by_id,
+              m.name AS referrer_name, m.nickname AS referrer_nickname, m.referral_code AS referrer_referral_code
+       FROM users u
+       LEFT JOIN users m ON u.referred_by_id = m.id
+       WHERE u.status = 'PENDING'
+       ORDER BY u.created_at DESC`
     );
 
     res.json({ users: result });
@@ -946,17 +950,18 @@ router.post(
   }
 );
 
-// Get all approved users (Admin only)
+// Get all approved users (Admin only) - USER (reseller) and MERCHANT; include referrer (merchant) when joined via referral
 router.get("/approved", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const [result] = await pool.query(
-      `SELECT id, name, nickname, email, id_number, points_balance, status, created_at 
-       FROM users 
-       WHERE status = 'APPROVED' AND role = 'USER'
-       ORDER BY created_at DESC`
+      `SELECT u.id, u.name, u.nickname, u.email, u.id_number, u.points_balance, u.status, u.role, u.referral_code, u.created_at,
+              u.referred_by_id,
+              m.name AS referrer_name, m.nickname AS referrer_nickname, m.referral_code AS referrer_referral_code
+       FROM users u
+       LEFT JOIN users m ON u.referred_by_id = m.id
+       WHERE u.status = 'APPROVED' AND (u.role IN ('USER', 'MERCHANT') OR u.role IS NULL)
+       ORDER BY u.created_at DESC`
     );
-
-    // Removed sensitive logging
 
     res.json({ users: result || [] });
   } catch (error) {
@@ -966,6 +971,219 @@ router.get("/approved", authenticateToken, requireAdmin, async (req, res) => {
       .json({ error: "Failed to fetch users", details: error.message });
   }
 });
+
+// Set user role (Admin only): USER (reseller) or MERCHANT. Merchant gets a referral_code.
+router.patch(
+  "/:userId/role",
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const userId = parseInt(req.params.userId);
+      const { role } = req.body;
+
+      if (isNaN(userId) || userId <= 0) {
+        return res.status(400).json({ error: "Invalid user ID" });
+      }
+      const roleUpper = role && typeof role === "string" ? role.toUpperCase() : "";
+      if (roleUpper !== "USER" && roleUpper !== "MERCHANT") {
+        return res.status(400).json({ error: "Invalid role. Use USER or MERCHANT" });
+      }
+
+      // Cannot change admin role
+      const [existing] = await pool.query(
+        "SELECT id, role, referral_code FROM users WHERE id = ?",
+        [userId]
+      );
+      if (existing.length === 0) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      if (existing[0].role === "ADMIN") {
+        return res.status(400).json({ error: "Cannot change admin role" });
+      }
+
+      let referralCode = null;
+      if (roleUpper === "MERCHANT") {
+        // Generate unique referral code (alphanumeric 8 chars)
+        let code;
+        let attempts = 0;
+        do {
+          code = crypto.randomBytes(4).toString("hex").toUpperCase();
+          const [dup] = await pool.query(
+            "SELECT id FROM users WHERE referral_code = ?",
+            [code]
+          );
+          if (dup.length === 0) break;
+          attempts++;
+          if (attempts > 10) {
+            return res.status(500).json({ error: "Failed to generate unique referral code" });
+          }
+        } while (true);
+        referralCode = code;
+      }
+
+      if (roleUpper === "MERCHANT") {
+        await pool.query(
+          "UPDATE users SET role = ?, referral_code = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+          [roleUpper, referralCode, userId]
+        );
+      } else {
+        await pool.query(
+          "UPDATE users SET role = ?, referral_code = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+          [roleUpper, userId]
+        );
+      }
+
+      const [updated] = await pool.query(
+        "SELECT id, name, role, referral_code FROM users WHERE id = ?",
+        [userId]
+      );
+      res.json({
+        message: `Role set to ${roleUpper === "MERCHANT" ? "Merchant" : "Reseller"}`,
+        user: updated[0],
+      });
+    } catch (error) {
+      console.error("Update role error:", error);
+      res.status(500).json({ error: "Failed to update role", details: error.message });
+    }
+  }
+);
+
+// Merchant: list sub-users (resellers referred by this merchant, approved only) with weekly sales
+router.get(
+  "/merchant/subusers",
+  authenticateToken,
+  requireMerchant,
+  async (req, res) => {
+    try {
+      const merchantId = req.user.id;
+      const { weekStart, weekEnd } = getWeekBoundaries();
+
+      const [result] = await pool.query(
+        `SELECT 
+           u.id, u.name, u.nickname, u.email, u.id_number, u.points_balance, u.status, u.face_image, u.created_at, u.updated_at,
+           COALESCE(ws.weekly_sales, 0) AS weekly_sales
+         FROM users u
+         LEFT JOIN (
+           SELECT 
+             user_id,
+             COALESCE(SUM(diamond_amount * COALESCE(quantity, 1)), 0) AS weekly_sales
+           FROM orders
+           WHERE status = 'COMPLETED'
+             AND created_at >= ?
+             AND created_at <= ?
+           GROUP BY user_id
+         ) ws ON ws.user_id = u.id
+         WHERE u.referred_by_id = ? AND u.role = 'USER' AND u.status = 'APPROVED'
+         ORDER BY u.created_at DESC`,
+        [weekStart, weekEnd, merchantId]
+      );
+      // Normalize image paths and ensure weekly_sales is a number
+      const normalizedResult = (result || []).map((user) => {
+        if (user.face_image) {
+          user.face_image = normalizeImagePath(user.face_image);
+        }
+        user.weekly_sales = Number(user.weekly_sales) || 0;
+        return user;
+      });
+      res.json({ subusers: normalizedResult });
+    } catch (error) {
+      console.error("Merchant subusers error:", error);
+      res.status(500).json({ error: "Failed to fetch sub-users", details: error.message });
+    }
+  }
+);
+
+// Merchant: add points to a sub-user only (deducts from merchant's balance)
+router.post(
+  "/merchant/subusers/:userId/points",
+  authenticateToken,
+  requireMerchant,
+  async (req, res) => {
+    const connection = await pool.getConnection();
+    try {
+      const subUserId = parseInt(req.params.userId);
+      const amount = parseInt(req.body.amount);
+      const description = req.body.description;
+      const merchantId = req.user.id;
+
+      if (isNaN(subUserId) || subUserId <= 0) {
+        connection.release();
+        return res.status(400).json({ error: "Invalid user ID" });
+      }
+      if (!amount || amount <= 0 || isNaN(amount) || amount > 1000000) {
+        connection.release();
+        return res.status(400).json({ error: "Valid amount required (1–1,000,000)" });
+      }
+      const sanitizedDescription = description
+        ? description.trim().substring(0, 500)
+        : null;
+
+      const [subUser] = await connection.query(
+        "SELECT id, name, referred_by_id FROM users WHERE id = ? AND role = 'USER' AND status = 'APPROVED'",
+        [subUserId]
+      );
+      if (subUser.length === 0 || subUser[0].referred_by_id !== merchantId) {
+        connection.release();
+        return res.status(403).json({ error: "Not your sub-user or user not found" });
+      }
+
+      const [merchantRow] = await connection.query(
+        "SELECT id, points_balance FROM users WHERE id = ?",
+        [merchantId]
+      );
+      if (merchantRow.length === 0) {
+        connection.release();
+        return res.status(400).json({ error: "Merchant account not found" });
+      }
+      const merchantBalance = Number(merchantRow[0].points_balance) || 0;
+      if (amount > merchantBalance) {
+        connection.release();
+        return res.status(400).json({
+          error: `Insufficient balance. Your current balance is ${merchantBalance.toLocaleString()}. You tried to add ${amount.toLocaleString()}.`,
+        });
+      }
+
+      await connection.beginTransaction();
+      await connection.query(
+        `UPDATE users SET points_balance = points_balance - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [amount, merchantId]
+      );
+      await connection.query(
+        `UPDATE users SET points_balance = points_balance + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [amount, subUserId]
+      );
+      await connection.query(
+        `INSERT INTO transactions (user_id, amount, transaction_type, description, merchant_id)
+         VALUES (?, ?, 'ADDED', ?, ?)`,
+        [subUserId, amount, sanitizedDescription || "Merchant added diamonds", merchantId]
+      );
+      await connection.commit();
+      connection.release();
+
+      const [updated] = await pool.query(
+        "SELECT id, name, points_balance FROM users WHERE id = ?",
+        [subUserId]
+      );
+      const [merchantUpdated] = await pool.query(
+        "SELECT points_balance FROM users WHERE id = ?",
+        [merchantId]
+      );
+      res.json({
+        message: "Points added successfully",
+        user: updated[0],
+        merchant_balance: merchantUpdated[0]?.points_balance ?? merchantBalance - amount,
+      });
+    } catch (error) {
+      try {
+        await connection.rollback();
+      } catch (_) {}
+      connection.release();
+      console.error("Merchant add points error:", error);
+      res.status(500).json({ error: "Failed to add points", details: error.message });
+    }
+  }
+);
 
 // Update user profile (name, nickname and/or face image)
 router.put(
@@ -1437,15 +1655,19 @@ router.get(
         pt.transaction_type,
         pt.description,
         pt.admin_id,
+        pt.merchant_id,
         pt.created_at,
         u.name as user_name,
         u.id_number as user_id_number,
         u.email as user_email,
         u.nickname as user_nickname,
-        admin.name as admin_name
+        admin.name as admin_name,
+        merchant.name as merchant_name,
+        merchant.nickname as merchant_nickname
       FROM transactions pt
       LEFT JOIN users u ON pt.user_id = u.id
       LEFT JOIN users admin ON pt.admin_id = admin.id
+      LEFT JOIN users merchant ON pt.merchant_id = merchant.id
       WHERE 1=1
     `;
       const params = [];
@@ -1484,7 +1706,7 @@ router.get(
   }
 );
 
-// Get user details by ID (Admin only) - MUST be after all specific routes like /pending, /approved, etc.
+// Get user details by ID (Admin only) - MUST be after all specific routes like /pending, /approved, etc. Include referrer (merchant) when joined via referral.
 router.get("/:userId", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
@@ -1494,10 +1716,13 @@ router.get("/:userId", authenticateToken, requireAdmin, async (req, res) => {
     }
 
     const [result] = await pool.query(
-      `SELECT id, name, nickname, phone_number, email, id_number, face_image, id_card_front, id_card_back, 
-              points_balance, status, role, created_at, updated_at 
-       FROM users 
-       WHERE id = ?`,
+      `SELECT u.id, u.name, u.nickname, u.phone_number, u.email, u.id_number, u.face_image, u.id_card_front, u.id_card_back,
+              u.points_balance, u.status, u.role, u.referral_code, u.created_at, u.updated_at,
+              u.referred_by_id,
+              m.name AS referrer_name, m.nickname AS referrer_nickname, m.referral_code AS referrer_referral_code, m.id AS referrer_id
+       FROM users u
+       LEFT JOIN users m ON u.referred_by_id = m.id
+       WHERE u.id = ?`,
       [userId]
     );
 

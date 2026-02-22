@@ -62,10 +62,10 @@ const requireAdmin = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
-  
+
   if (req.user.role !== 'ADMIN') {
     console.error('Admin access denied. User role:', req.user.role, 'User ID:', req.user.id);
-    return res.status(403).json({ 
+    return res.status(403).json({
       error: 'Admin access required',
       userRole: req.user.role,
       userId: req.user.id
@@ -74,5 +74,18 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-module.exports = { authenticateToken, requireAdmin };
+const requireMerchant = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  if (req.user.role !== 'MERCHANT') {
+    return res.status(403).json({
+      error: 'Merchant access required',
+      userRole: req.user.role
+    });
+  }
+  next();
+};
+
+module.exports = { authenticateToken, requireAdmin, requireMerchant };
 
